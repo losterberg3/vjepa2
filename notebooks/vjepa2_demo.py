@@ -56,9 +56,9 @@ def build_pt_video_transform(img_size):
 
 
 def get_video():
-    vr = VideoReader("sample_video.mp4")
+    vr = VideoReader("msl/episode_000.mp4")
     # choosing some frames here, you can define more complex sampling strategy
-    frame_idx = np.arange(0, 128, 2)
+    frame_idx = np.arange(100, 164, 1)
     video = vr.get_batch(frame_idx).asnumpy()
     return video
 
@@ -97,74 +97,52 @@ def get_vjepa_video_classification_results(classifier, out_patch_features_pt):
 
 
 def run_sample_inference():
-    # HuggingFace model repo name
-    hf_model_name = (
-        "facebook/vjepa2-vitg-fpc64-384"  # Replace with your favored model, e.g. facebook/vjepa2-vitg-fpc64-384
-    )
-    # Path to local PyTorch weights
-    pt_model_path = "YOUR_MODEL_PATH"
+    # 1. Setup paths and constants
+    pt_model_path = "checkpoints/vitg-384.pt"
+    classifier_model_path = "checkpoints/ssv2-vitg-384-64x2x3.pt"
+    sample_video_path = "msl/episode_001.mp4"
+    img_size = 384  # Manually set this since we aren't using hf_transform.crop_size
 
-    sample_video_path = "sample_video.mp4"
-    # Download the video if not yet downloaded to local path
+    # 2. Check for video (Removed the auto-download to ensure we only use your robot video)
     if not os.path.exists(sample_video_path):
-        video_url = "https://huggingface.co/datasets/nateraw/kinetics-mini/resolve/main/val/bowling/-WH-lxmGJVY_000005_000015.mp4"
-        command = ["wget", video_url, "-O", sample_video_path]
-        subprocess.run(command)
-        print("Downloading video")
+        raise FileNotFoundError(f"Could not find your video at {sample_video_path}")
 
-    # Initialize the HuggingFace model, load pretrained weights
-    model_hf = AutoModel.from_pretrained(hf_model_name)
-    model_hf.cuda().eval()
-
-    # Build HuggingFace preprocessing transform
-    hf_transform = AutoVideoProcessor.from_pretrained(hf_model_name)
-    img_size = hf_transform.crop_size["height"]  # E.g. 384, 256, etc.
-
-    # Initialize the PyTorch model, load pretrained weights
+    # 3. Initialize ONLY the PyTorch model
+    print("Loading PyTorch Backbone...")
     model_pt = vit_giant_xformers_rope(img_size=(img_size, img_size), num_frames=64)
     model_pt.cuda().eval()
     load_pretrained_vjepa_pt_weights(model_pt, pt_model_path)
 
-    # Build PyTorch preprocessing transform
+    # 4. Build Preprocessing
     pt_video_transform = build_pt_video_transform(img_size=img_size)
 
-    # Inference on video
-    out_patch_features_hf, out_patch_features_pt = forward_vjepa_video(
-        model_hf, model_pt, hf_transform, pt_video_transform
-    )
+    # 5. Local Inference
+    print("Running Inference...")
+    with torch.inference_mode():
+        # Using the same get_video() logic from your script
+        video = get_video()  # T x H x W x C
+        video = torch.from_numpy(video).permute(0, 3, 1, 2)  # T x C x H x W
+        x_pt = pt_video_transform(video).cuda().unsqueeze(0)
+        
+        # Extract features (The Latents)
+        out_patch_features_pt = model_pt(x_pt)
 
-    print(
-        f"""
-        Inference results on video:
-        HuggingFace output shape: {out_patch_features_hf.shape}
-        PyTorch output shape:     {out_patch_features_pt.shape}
-        Absolute difference sum:  {torch.abs(out_patch_features_pt - out_patch_features_hf).sum():.6f}
-        Close: {torch.allclose(out_patch_features_pt, out_patch_features_hf, atol=1e-3, rtol=1e-3)}
-        """
-    )
+    print(f"PyTorch output shape: {out_patch_features_pt.shape}")
 
-    # Initialize the classifier
-    classifier_model_path = "YOUR_ATTENTIVE_PROBE_PATH"
+    # 6. Initialize and Run the Classifier
+    print("Loading Classifier Probe...")
     classifier = (
-        AttentiveClassifier(embed_dim=model_pt.embed_dim, num_heads=16, depth=4, num_classes=174).cuda().eval()
+        AttentiveClassifier(embed_dim=model_pt.embed_dim, num_heads=16, depth=4, num_classes=174)
+        .cuda().eval()
     )
     load_pretrained_vjepa_classifier_weights(classifier, classifier_model_path)
 
-    # Download SSV2 classes if not already present
-    ssv2_classes_path = "ssv2_classes.json"
-    if not os.path.exists(ssv2_classes_path):
-        command = [
-            "wget",
-            "https://huggingface.co/datasets/huggingface/label-files/resolve/d79675f2d50a7b1ecf98923d42c30526a51818e2/"
-            "something-something-v2-id2label.json",
-            "-O",
-            "ssv2_classes.json",
-        ]
-        subprocess.run(command)
-        print("Downloading SSV2 classes")
+    # Ensure class labels exist locally
+    if not os.path.exists("ssv2_classes.json"):
+        print("Downloading SSV2 class labels...")
+        subprocess.run(["wget", "https://huggingface.co/datasets/huggingface/label-files/resolve/main/something-something-v2-id2label.json", "-O", "ssv2_classes.json"])
 
     get_vjepa_video_classification_results(classifier, out_patch_features_pt)
-
 
 if __name__ == "__main__":
     # Run with: `python -m notebooks.vjepa2_demo`
