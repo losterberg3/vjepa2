@@ -56,9 +56,9 @@ def build_pt_video_transform(img_size):
 
 
 def get_video():
-    vr = VideoReader("msl/episode_000.mp4")
+    vr = VideoReader("msl/episode_001.mp4")
     # choosing some frames here, you can define more complex sampling strategy
-    frame_idx = np.arange(100, 164, 1)
+    frame_idx = np.arange(200, 328, 2)
     video = vr.get_batch(frame_idx).asnumpy()
     return video
 

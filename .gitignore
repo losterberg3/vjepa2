@@ -1,6 +1,8 @@
 checkpoints/
 *.pt
 #*.mp4
+*.png
+*.gif
 ssv2_classes.json
 __pycache__/
 *.pyc
